@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AfriClaw Admin Dashboard</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        color: #ffffff;
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 40px;
+        padding: 20px;
+        background: rgba(0, 255, 0, 0.05);
+        border-left: 4px solid #00ff00;
+        border-radius: 8px;
+      }
+
+      h1 {
+        font-size: 2.5em;
+        color: #00ff00;
+        text-shadow: 0 0 10px #00ff00;
+      }
+
+      .subtitle {
+        color: #888;
+        font-size: 0.9em;
+      }
+
+      .refresh-btn {
+        background: #00ff00;
+        color: #1a1a2e;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 4px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+
+      .refresh-btn:hover {
+        background: #00cc00;
+        box-shadow: 0 0 15px #00ff00;
+      }
+
+      .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+        margin-bottom: 40px;
+      }
+
+      .card {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(0, 255, 0, 0.2);
+        border-radius: 8px;
+        padding: 24px;
+        backdrop-filter: blur(10px);
+        transition: all 0.3s ease;
+      }
+
+      .card:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: #00ff00;
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.1);
+      }
+
+      .card-title {
+        color: #888;
+        font-size: 0.9em;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+      }
+
+      .card-value {
+        font-size: 2.5em;
+        font-weight: bold;
+        color: #00ff00;
+        text-shadow: 0 0 10px #00ff00;
+      }
+
+      .card-subtext {
+        color: #666;
+        font-size: 0.85em;
+        margin-top: 8px;
+      }
+
+      .section-title {
+        font-size: 1.8em;
+        color: #00ff00;
+        text-shadow: 0 0 10px #00ff00;
+        margin: 40px 0 20px 0;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(0, 255, 0, 0.2);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      th {
+        background: rgba(0, 255, 0, 0.1);
+        padding: 15px;
+        text-align: left;
+        color: #00ff00;
+        font-weight: bold;
+        border-bottom: 1px solid rgba(0, 255, 0, 0.2);
+        text-transform: uppercase;
+        font-size: 0.85em;
+        letter-spacing: 1px;
+      }
+
+      td {
+        padding: 15px;
+        border-bottom: 1px solid rgba(0, 255, 0, 0.1);
+        color: #ccc;
+      }
+
+      tr:hover {
+        background: rgba(0, 255, 0, 0.05);
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      .status-success {
+        color: #00ff00;
+        font-weight: bold;
+      }
+
+      .status-failed {
+        color: #ff3333;
+        font-weight: bold;
+      }
+
+      .status-pending {
+        color: #ffaa00;
+        font-weight: bold;
+      }
+
+      .loader {
+        border: 3px solid rgba(0, 255, 0, 0.2);
+        border-top: 3px solid #00ff00;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        margin: 20px auto;
+      }
+
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .error {
+        background: rgba(255, 51, 51, 0.1);
+        border: 1px solid #ff3333;
+        color: #ff6666;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+      }
+
+      .success {
+        background: rgba(0, 255, 0, 0.1);
+        border: 1px solid #00ff00;
+        color: #00ff00;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+      }
+
+      .mpesa-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-top: 20px;
+      }
+
+      .mpesa-stat {
+        background: rgba(0, 255, 0, 0.05);
+        border-left: 3px solid #00ff00;
+        padding: 15px;
+        border-radius: 4px;
+      }
+
+      .mpesa-stat-label {
+        color: #888;
+        font-size: 0.85em;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+      }
+
+      .mpesa-stat-value {
+        font-size: 1.8em;
+        font-weight: bold;
+        color: #00ff00;
+      }
+
+      footer {
+        text-align: center;
+        color: #666;
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(0, 255, 0, 0.2);
+        font-size: 0.85em;
+      }
+
+      .timestamp {
+        color: #666;
+        font-size: 0.85em;
+        margin-top: 10px;
+      }
+
+      @media (max-width: 768px) {
+        h1 {
+          font-size: 1.8em;
+        }
+
+        .dashboard-grid {
+          grid-template-columns: 1fr;
+        }
+
+        header {
+          flex-direction: column;
+          gap: 15px;
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div>
+          <h1>AfriClaw Admin</h1>
+          <p class="subtitle">
+            Real-time dashboard for WhatsApp AI Assistant
+          </p>
+        </div>
+        <button class="refresh-btn" onclick="refreshDashboard()">
+          Refresh Data
+        </button>
+      </header>
+
+      <div id="dashboard-content">
+        <div class="loader"></div>
+        <p style="text-align: center; color: #888">
+          Loading dashboard data...
+        </p>
+      </div>
+
+      <footer>
+        <p>AfriClaw © 2024 | Empowering Africa with AI</p>
+        <p class="timestamp" id="last-updated"></p>
+      </footer>
+    </div>
+
+    <script>
+      async function refreshDashboard() {
+        const content = document.getElementById('dashboard-content');
+        content.innerHTML = '<div class="loader"></div><p style="text-align: center; color: #888">Loading dashboard data...</p>';
+
+        try {
+          const response = await fetch('/admin/data');
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const data = await response.json();
+          renderDashboard(data);
+        } catch (error) {
+          console.error('Error fetching dashboard data:', error);
+          content.innerHTML = `<div class="error">Error loading dashboard: ${error.message}</div>`;
+        }
+      }
+
+      function renderDashboard(data) {
+        const content = document.getElementById('dashboard-content');
+
+        let html = `
+          <div class="dashboard-grid">
+            <div class="card">
+              <div class="card-title">Total Users</div>
+              <div class="card-value">${data.summary.totalUsers}</div>
+              <div class="card-subtext">Registered on AfriClaw</div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Today's Messages</div>
+              <div class="card-value">${data.summary.todayMessages}</div>
+              <div class="card-subtext">Total messages processed</div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Active Users (24h)</div>
+              <div class="card-value">${data.summary.activeUsers}</div>
+              <div class="card-subtext">Users active in last day</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">M-Pesa Transactions (Today)</div>
+            <div class="mpesa-summary">
+              <div class="mpesa-stat">
+                <div class="mpesa-stat-label">Total Transactions</div>
+                <div class="mpesa-stat-value">${data.mpesa.total}</div>
+              </div>
+              <div class="mpesa-stat">
+                <div class="mpesa-stat-label">Successful</div>
+                <div class="mpesa-stat-value" style="color: #00ff00;">
+                  ${data.mpesa.successful}
+                </div>
+              </div>
+              <div class="mpesa-stat">
+                <div class="mpesa-stat-label">Failed</div>
+                <div class="mpesa-stat-value" style="color: #ff3333;">
+                  ${data.mpesa.failed}
+                </div>
+              </div>
+              <div class="mpesa-stat">
+                <div class="mpesa-stat-label">Total Amount</div>
+                <div class="mpesa-stat-value">KES ${data.mpesa.totalAmount.toLocaleString()}</div>
+              </div>
+            </div>
+          </div>
+
+          <h2 class="section-title">Recent Conversations</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Phone Number</th>
+                <th>Last Message</th>
+                <th>Time</th>
+                <th>Total Messages</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        if (data.recentConversations.length === 0) {
+          html += `
+              <tr>
+                <td colspan="4" style="text-align: center; color: #888;">
+                  No conversations yet
+                </td>
+              </tr>
+            `;
+        } else {
+          data.recentConversations.forEach((conv) => {
+            const time = new Date(conv.lastMessageTime).toLocaleString();
+            html += `
+              <tr>
+                <td>${conv.phoneNumber}</td>
+                <td>${conv.lastMessage || 'N/A'}</td>
+                <td>${time}</td>
+                <td>${conv.totalMessages}</td>
+              </tr>
+            `;
+          });
+        }
+
+        html += `
+            </tbody>
+          </table>
+        `;
+
+        content.innerHTML = html;
+
+        // Update timestamp
+        document.getElementById('last-updated').textContent =
+          'Last updated: ' +
+          new Date().toLocaleString() +
+          ' | Generated at: ' +
+          data.generatedAt;
+      }
+
+      // Load dashboard on page load
+      document.addEventListener('DOMContentLoaded', refreshDashboard);
+
+      // Auto-refresh every 30 seconds
+      setInterval(refreshDashboard, 30000);
+    </script>
+  </body>
+</html>
