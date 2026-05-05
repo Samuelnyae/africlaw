@@ -27,12 +27,20 @@ function requireHttps(req, res, next) {
     return next();
   }
 
+  // Railway sets x-forwarded-proto header for HTTPS
   const proto = req.headers['x-forwarded-proto'];
-  if (req.secure || proto === 'https') {
+  const isSecure = req.secure || proto === 'https';
+  
+  // Allow health checks over HTTP
+  if (req.path === '/health') {
+    return next();
+  }
+  
+  if (isSecure) {
     return next();
   }
 
-  return res.status(400).json({ error: 'HTTPS required' });
+  return res.redirect(`https://${req.headers.host}${req.url}`);
 }
 
 function internalServiceAuth(req, res, next) {
