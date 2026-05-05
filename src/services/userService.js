@@ -1,4 +1,4 @@
-const { db } = require('../config/firebase');
+const { db, admin } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 

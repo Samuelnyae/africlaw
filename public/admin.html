@@ -1,4 +1,1082 @@
-<!DOCTYPE html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AfriClaw Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body class="bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div id="loginView" class="min-h-screen flex items-center justify-center p-4">
+      <div class="w-full max-w-md rounded-xl border bg-white p-6 shadow dark:bg-slate-900">
+        <h1 class="text-2xl font-bold">AfriClaw Admin</h1>
+        <p class="mt-1 text-sm text-slate-500">Sign in with Firebase credentials</p>
+        <div class="mt-4 space-y-3">
+          <input id="email" type="email" placeholder="Email" class="w-full rounded border p-2 bg-transparent" />
+          <input id="password" type="password" placeholder="Password" class="w-full rounded border p-2 bg-transparent" />
+          <button id="loginBtn" class="w-full rounded bg-emerald-600 px-4 py-2 text-white">Sign in</button>
+          <p id="loginError" class="text-sm text-red-500"></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="appView" class="hidden min-h-screen">
+      <div class="flex min-h-screen">
+        <aside class="w-64 border-r bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+          <h2 class="text-lg font-semibold">AfriClaw</h2>
+          <p id="roleBadge" class="mt-1 text-xs text-emerald-600"></p>
+          <nav class="mt-6 space-y-2">
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="overview">Overview</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="conversations">Conversations</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="users">Users</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="logs">Logs</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="settings">Settings</button>
+          </nav>
+        </aside>
+        <main class="flex-1">
+          <header class="flex items-center justify-between border-b bg-white px-4 py-3 dark:bg-slate-900 dark:border-slate-800">
+            <input id="searchInput" class="w-72 rounded border p-2 bg-transparent" placeholder="Search users or conversations..." />
+            <div class="flex items-center gap-3">
+              <button id="themeToggle" class="rounded border px-3 py-1">Dark/Light</button>
+              <div class="relative">
+                <button id="profileBtn" class="rounded border px-3 py-1">Admin</button>
+                <div id="profileMenu" class="hidden absolute right-0 mt-2 w-40 rounded border bg-white p-2 shadow dark:bg-slate-800">
+                  <button id="logoutBtn" class="w-full rounded px-2 py-1 text-left hover:bg-slate-100 dark:hover:bg-slate-700">Logout</button>
+                </div>
+              </div>
+            </div>
+          </header>
+          <section id="content" class="p-6"></section>
+        </main>
+      </div>
+    </div>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+      import { getAuth, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+      let accessToken = "";
+      let currentRole = "viewer";
+      let currentPage = "overview";
+      let auth = null;
+
+      const roleActions = {
+        viewer: [],
+        operator: ["override", "flag", "broadcast", "brain"],
+        admin: ["override", "flag", "broadcast", "brain", "settings", "reset"]
+      };
+
+      const decode = (token) => { try { return JSON.parse(atob(token.split(".")[1] || "e30=")); } catch { return {}; } };
+
+      async function initFirebase() {
+        const r = await fetch("/api/admin/auth-config");
+        if (!r.ok) throw new Error("Failed to load auth config (server returned " + r.status + "). Make sure the Express server is running with: npm start");
+        const contentType = r.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) throw new Error("Auth config endpoint returned HTML instead of JSON. Make sure you access this page via the Express server (npm start), not directly as a file.");
+        const cfg = await r.json();
+        if (!cfg.apiKey || !cfg.authDomain || !cfg.projectId || !cfg.appId) throw new Error("Missing Firebase web auth config. Check FIREBASE_WEB_* variables in your .env file.");
+        auth = getAuth(initializeApp(cfg));
+      }
+
+      function api(path, options = {}) {
+        return fetch(path, {
+          ...options,
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(options.headers || {}) }
+        }).then(async (r) => {
+          if (r.status === 401) { localStorage.removeItem("access_token"); location.reload(); return {}; }
+          const data = await r.json();
+          if (!r.ok) { console.error("API error:", path, data); content.innerHTML = `<div class="rounded-xl border border-red-300 bg-red-50 p-4 dark:bg-red-900/20 dark:border-red-800"><p class="text-red-600 dark:text-red-400 font-semibold">Error: ${data.error || r.statusText}</p></div>`; return data; }
+          return data;
+        }).catch((err) => { console.error("Network error:", err); return {}; });
+      }
+
+      function can(action) { return roleActions[currentRole]?.includes(action); }
+
+      async function renderOverview() {
+        const d = await api("/api/admin/overview");
+        content.innerHTML = `
+          <h1 class="text-2xl font-semibold">Overview</h1>
+          <div class="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-4">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm text-slate-500">Total users</p><p class="mt-1 text-2xl font-semibold">${d.totalUsers}</p></div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm text-slate-500">Active conversations</p><p class="mt-1 text-2xl font-semibold">${d.activeConversations}</p></div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm text-slate-500">Messages today</p><p class="mt-1 text-2xl font-semibold">${d.messagesToday}</p></div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm text-slate-500">Error rate</p><p class="mt-1 text-2xl font-semibold">${Math.round((d.errorRate || 0) * 100)}%</p></div>
+          </div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><canvas id="lineChart"></canvas></div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><canvas id="barChart"></canvas></div>
+          </div>`;
+        new Chart(document.getElementById("lineChart"), { type: "line", data: { labels: d.lineChart.map((x) => x.day), datasets: [{ label: "Messages", data: d.lineChart.map((x) => x.messages) }] } });
+        new Chart(document.getElementById("barChart"), { type: "bar", data: { labels: d.barChart.map((x) => x.label), datasets: [{ label: "Requests", data: d.barChart.map((x) => x.value) }] } });
+      }
+
+      async function renderConversations(search = "") {
+        const d = await api(`/api/admin/conversations?page=1&pageSize=20&search=${encodeURIComponent(search)}`);
+        content.innerHTML = `<h1 class="text-2xl font-semibold">Conversations</h1><div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><table class="w-full text-sm"><thead><tr class="text-left"><th>User</th><th>Last Message</th><th>Time</th><th>Actions</th></tr></thead><tbody>${d.items.map((r) => `<tr class="border-t dark:border-slate-800"><td>${r.phoneNumber}</td><td>${(r.lastMessage || "").slice(0, 60)}</td><td>${r.lastMessageAt || "-"}</td><td class="space-x-2 py-2"><button class="rounded border px-2 py-1" onclick="openThread('${r.phoneNumber}')">Thread</button>${can("flag") ? `<button class="rounded border px-2 py-1" onclick="flagConversation('${r.phoneNumber}')">Flag</button>` : ""}${can("reset") ? `<button class="rounded border px-2 py-1" onclick="resetMemory('${r.phoneNumber}')">Reset Memory</button>` : ""}</td></tr>`).join("")}</tbody></table></div><div id="threadView" class="mt-4"></div>`;
+      }
+
+      async function renderUsers(search = "") {
+        const d = await api(`/api/admin/users?page=1&pageSize=20&search=${encodeURIComponent(search)}`);
+        content.innerHTML = `<h1 class="text-2xl font-semibold">Users</h1><div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 overflow-auto"><table class="w-full text-sm"><thead><tr class="text-left"><th>Phone</th><th>Language</th><th>Messages</th><th>Status</th><th>Tags</th><th>Actions</th></tr></thead><tbody>${d.items.map((u) => `<tr class="border-t dark:border-slate-800"><td>${u.phoneNumber}</td><td>${u.language || "-"}</td><td>${u.totalMessages || 0}</td><td>${u.blocked ? "Blocked" : "Active"}</td><td>${(u.tags || []).join(", ")}</td><td class="space-x-2 py-2">${can("settings") ? `<button class="rounded border px-2 py-1" onclick="toggleBlock('${u.phoneNumber}', ${!u.blocked})">${u.blocked ? "Unblock" : "Block"}</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+      }
+
+      async function renderLogs() { const d = await api("/api/admin/logs"); content.innerHTML = `<h1 class="text-2xl font-semibold">Logs</h1><div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 max-h-[520px] overflow-auto">${d.items.map((l) => `<div class="border-b py-2 text-xs dark:border-slate-800"><span class="font-semibold">${l.level || "info"}</span> ${l.timestamp} ${l.action || ""} ${l.target || ""}</div>`).join("")}</div>`; }
+      async function renderSettings() { const s = await api("/api/admin/settings"); content.innerHTML = `<h1 class="text-2xl font-semibold">Settings</h1><div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm">Webhook secret: ${s.webhookSecret || "-"}</p></div>`; }
+
+      async function openThread(phoneNumber) { const t = await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}`); document.getElementById("threadView").innerHTML = `<div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><h3 class="font-semibold">Thread: ${t.phoneNumber}</h3><div class="mt-3 max-h-72 overflow-y-auto space-y-2">${t.messages.map((m) => `<div class="rounded border p-2 dark:border-slate-700"><p class="text-xs text-slate-500">${m.role} • ${m.timestamp || "-"}</p><p>${m.content}</p></div>`).join("")}</div></div>`; }
+      async function flagConversation(phoneNumber) { await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/flag`, { method: "POST" }); }
+      async function resetMemory(phoneNumber) { await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/reset-memory`, { method: "POST" }); }
+      async function toggleBlock(phoneNumber, blocked) { await api(`/api/admin/users/${encodeURIComponent(phoneNumber)}`, { method: "PATCH", body: JSON.stringify({ blocked }) }); renderUsers(searchInput.value); }
+
+      async function renderPage(page, search = "") {
+        currentPage = page;
+        if (page === "overview") return renderOverview();
+        if (page === "conversations") return renderConversations(search);
+        if (page === "users") return renderUsers(search);
+        if (page === "logs") return renderLogs();
+        if (page === "settings") return renderSettings();
+      }
+
+      function initUiEvents() {
+        document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => renderPage(b.dataset.page, searchInput.value)));
+        searchInput.addEventListener("input", (e) => { if (currentPage === "users" || currentPage === "conversations") renderPage(currentPage, e.target.value); });
+        themeToggle.addEventListener("click", () => document.documentElement.classList.toggle("dark"));
+        profileBtn.addEventListener("click", () => profileMenu.classList.toggle("hidden"));
+        logoutBtn.addEventListener("click", async () => { if (auth) await signOut(auth); localStorage.removeItem("access_token"); location.reload(); });
+      }
+
+      async function bootstrap() {
+        try { await initFirebase(); } catch (e) { loginError.textContent = e.message; }
+        const stored = localStorage.getItem("access_token");
+        if (stored) {
+          accessToken = stored;
+          const payload = decode(stored);
+          currentRole = payload.role || "viewer";
+          roleBadge.textContent = `Role: ${currentRole}`;
+          loginView.classList.add("hidden");
+          appView.classList.remove("hidden");
+          initUiEvents();
+          return renderPage("overview");
+        }
+        loginBtn.addEventListener("click", async () => {
+          try {
+            const cred = await signInWithEmailAndPassword(auth, email.value, password.value);
+            accessToken = await cred.user.getIdToken();
+            localStorage.setItem("access_token", accessToken);
+            location.reload();
+          } catch (e) {
+            loginError.textContent = e.message;
+          }
+        });
+      }
+
+      bootstrap();
+      window.openThread = openThread;
+      window.flagConversation = flagConversation;
+      window.resetMemory = resetMemory;
+      window.toggleBlock = toggleBlock;
+    </script>
+  </body>
+</html>
+<!--
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AfriClaw Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+      import {
+        getAuth,
+        signInWithEmailAndPassword,
+        signOut
+      } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+      let accessToken = "";
+      let currentRole = "viewer";
+      let currentPage = "overview";
+      let firebaseAuth = null;
+
+      const roleActions = {
+        viewer: [],
+        operator: ["override", "flag", "broadcast", "brain"],
+        admin: ["override", "flag", "broadcast", "brain", "settings", "reset"],
+      };
+
+      async function loadFirebaseAuth() {
+        const response = await fetch("/api/admin/auth-config");
+        const config = await response.json();
+        if (!config.apiKey || !config.authDomain || !config.projectId || !config.appId) {
+          throw new Error("Firebase Web Auth config missing on server.");
+        }
+        const app = initializeApp(config);
+        firebaseAuth = getAuth(app);
+      }
+
+      function api(path, options = {}) {
+        return fetch(path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+            ...(options.headers || {}),
+          },
+        }).then((r) => r.json());
+      }
+
+      function can(action) {
+        return roleActions[currentRole]?.includes(action);
+      }
+
+      async function renderOverview() {
+        const data = await api("/api/admin/overview");
+        const content = document.getElementById("content");
+        content.innerHTML = `
+          <h1 class="text-2xl font-semibold">Overview</h1>
+          <div class="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-4">
+            ${["Total users", "Active conversations", "Messages today", "Brain response time", "Error rate", "Uptime"]
+              .map((title, i) => {
+                const values = [
+                  data.totalUsers,
+                  data.activeConversations,
+                  data.messagesToday,
+                  data.brainResponseTimeMs + " ms",
+                  Math.round(data.errorRate * 100) + "%",
+                  data.uptimeSeconds + " s",
+                ];
+                return `<div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm text-slate-500">${title}</p><p class="mt-1 text-2xl font-semibold">${values[i] ?? "-"}</p></div>`;
+              })
+              .join("")}
+          </div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><canvas id="lineChart"></canvas></div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><canvas id="barChart"></canvas></div>
+          </div>
+        `;
+        new Chart(document.getElementById("lineChart"), {
+          type: "line",
+          data: {
+            labels: data.lineChart.map((d) => d.day),
+            datasets: [{ label: "Messages", data: data.lineChart.map((d) => d.messages) }],
+          },
+        });
+        new Chart(document.getElementById("barChart"), {
+          type: "bar",
+          data: {
+            labels: data.barChart.map((d) => d.label),
+            datasets: [{ label: "Requests", data: data.barChart.map((d) => d.value) }],
+          },
+        });
+      }
+
+      async function renderConversations(search = "") {
+        const data = await api(
+          `/api/admin/conversations?page=1&pageSize=20&search=${encodeURIComponent(search)}`
+        );
+        const content = document.getElementById("content");
+        content.innerHTML = `
+          <h1 class="text-2xl font-semibold">Conversations</h1>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left"><th>User</th><th>Last Message</th><th>Time</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${data.items
+                  .map(
+                    (row) => `
+                  <tr class="border-t dark:border-slate-800">
+                    <td>${row.phoneNumber}</td>
+                    <td>${(row.lastMessage || "").slice(0, 60)}</td>
+                    <td>${row.lastMessageAt || "-"}</td>
+                    <td class="space-x-2 py-2">
+                      <button class="rounded border px-2 py-1" onclick="openThread('${row.phoneNumber}')">Thread</button>
+                      ${can("flag") ? `<button class="rounded border px-2 py-1" onclick="flagConversation('${row.phoneNumber}')">Flag</button>` : ""}
+                      ${can("reset") ? `<button class="rounded border px-2 py-1" onclick="resetMemory('${row.phoneNumber}')">Reset Memory</button>` : ""}
+                    </td>
+                  </tr>
+                `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+          <div id="threadView" class="mt-4"></div>
+        `;
+      }
+
+      async function openThread(phoneNumber) {
+        const thread = await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}`);
+        document.getElementById("threadView").innerHTML = `
+          <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+            <h3 class="font-semibold">Thread: ${thread.phoneNumber}</h3>
+            <div class="mt-3 max-h-72 overflow-y-auto space-y-2">
+              ${thread.messages
+                .map(
+                  (m) => `<div class="rounded border p-2 dark:border-slate-700"><p class="text-xs text-slate-500">${m.role} • ${m.timestamp || "-"}</p><p>${m.content}</p></div>`
+                )
+                .join("")}
+            </div>
+            ${can("override") ? `<div class="mt-3 flex gap-2"><input id="overrideInput" class="flex-1 rounded border p-2 bg-transparent" placeholder="Manual override reply"/><button class="rounded bg-emerald-600 px-3 py-2 text-white" onclick="sendOverride('${thread.phoneNumber}')">Send</button></div>` : ""}
+          </div>
+        `;
+      }
+
+      async function sendOverride(phoneNumber) {
+        const message = document.getElementById("overrideInput").value;
+        await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/override-reply`, {
+          method: "POST",
+          body: JSON.stringify({ message }),
+        });
+        await openThread(phoneNumber);
+      }
+
+      async function flagConversation(phoneNumber) {
+        await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/flag`, {
+          method: "POST",
+        });
+      }
+
+      async function resetMemory(phoneNumber) {
+        await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/reset-memory`, {
+          method: "POST",
+        });
+      }
+
+      async function renderUsers(search = "") {
+        const data = await api(
+          `/api/admin/users?page=1&pageSize=20&search=${encodeURIComponent(search)}`
+        );
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Users</h1>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 overflow-auto">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left"><th>Phone</th><th>Language</th><th>Messages</th><th>Status</th><th>Tags</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${data.items
+                  .map(
+                    (u) => `
+                  <tr class="border-t dark:border-slate-800">
+                    <td>${u.phoneNumber}</td>
+                    <td>${u.language || "-"}</td>
+                    <td>${u.totalMessages || 0}</td>
+                    <td>${u.blocked ? "Blocked" : "Active"}</td>
+                    <td>${(u.tags || []).join(", ")}</td>
+                    <td class="space-x-2 py-2">
+                      ${can("settings") ? `<button class="rounded border px-2 py-1" onclick="toggleBlock('${u.phoneNumber}', ${!u.blocked})">${u.blocked ? "Unblock" : "Block"}</button>` : ""}
+                      ${can("settings") ? `<button class="rounded border px-2 py-1" onclick="setTags('${u.phoneNumber}')">Assign tags</button>` : ""}
+                    </td>
+                  </tr>
+                `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      async function toggleBlock(phoneNumber, blocked) {
+        await api(`/api/admin/users/${encodeURIComponent(phoneNumber)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ blocked }),
+        });
+        await renderUsers(document.getElementById("searchInput").value);
+      }
+
+      async function setTags(phoneNumber) {
+        const tags = prompt("Comma-separated tags");
+        if (!tags) return;
+        await api(`/api/admin/users/${encodeURIComponent(phoneNumber)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            tags: tags
+              .split(",")
+              .map((t) => t.trim())
+              .filter(Boolean),
+          }),
+        });
+        await renderUsers(document.getElementById("searchInput").value);
+      }
+
+      async function renderBrain() {
+        const brain = await api("/api/admin/brain");
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Brain Control</h1>
+          <div class="mt-4 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+              <label class="text-sm">System prompt</label>
+              <textarea id="brainPrompt" class="mt-1 w-full rounded border p-2 bg-transparent" rows="8">${brain.systemPrompt}</textarea>
+              <label class="mt-3 block text-sm">Temperature</label>
+              <input id="brainTemp" class="mt-1 w-full" type="range" min="0" max="1" step="0.1" value="${brain.temperature}" />
+              <div class="mt-2 space-x-3">
+                ${Object.keys(brain.tools)
+                  .map(
+                    (k) =>
+                      `<label><input type="checkbox" id="tool_${k}" ${brain.tools[k] ? "checked" : ""}/> ${k}</label>`
+                  )
+                  .join("")}
+              </div>
+              ${can("brain") ? `<button class="mt-3 rounded bg-emerald-600 px-3 py-2 text-white" onclick="saveBrain()">Save</button>` : ""}
+            </div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+              <label class="text-sm">Test message input</label>
+              <input id="brainTestInput" class="mt-1 w-full rounded border p-2 bg-transparent" />
+              <button class="mt-2 rounded border px-3 py-2" onclick="testBrain()">Run Test</button>
+              <pre id="brainTestOutput" class="mt-3 max-h-64 overflow-auto rounded border p-2 text-xs"></pre>
+            </div>
+          </div>
+        `;
+      }
+
+      async function saveBrain() {
+        const tools = {};
+        ["knowledge", "payments", "memory"].forEach((k) => {
+          tools[k] = document.getElementById(`tool_${k}`)?.checked || false;
+        });
+        await api("/api/admin/brain", {
+          method: "PATCH",
+          body: JSON.stringify({
+            systemPrompt: document.getElementById("brainPrompt").value,
+            temperature: Number(document.getElementById("brainTemp").value),
+            tools,
+          }),
+        });
+      }
+
+      async function testBrain() {
+        const output = await api("/api/admin/brain/test", {
+          method: "POST",
+          body: JSON.stringify({ input: document.getElementById("brainTestInput").value }),
+        });
+        document.getElementById("brainTestOutput").textContent = JSON.stringify(output, null, 2);
+      }
+
+      function renderBroadcast() {
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Broadcast</h1>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 space-y-3 max-w-2xl">
+            <select id="segment" class="w-full rounded border p-2 bg-transparent"><option value="all">All Users</option><option value="active">Active Users</option><option value="tag:vip">VIP Tag</option></select>
+            <textarea id="broadcastMessage" rows="5" class="w-full rounded border p-2 bg-transparent" placeholder="Broadcast message"></textarea>
+            <input id="scheduleAt" type="datetime-local" class="w-full rounded border p-2 bg-transparent" />
+            <button class="rounded bg-emerald-600 px-3 py-2 text-white" ${can("broadcast") ? "" : "disabled"} onclick="sendBroadcast()">Schedule Broadcast</button>
+            <p class="text-xs text-slate-500">Preview: <span id="broadcastPreview"></span></p>
+          </div>
+        `;
+        document
+          .getElementById("broadcastMessage")
+          .addEventListener("input", (e) => {
+            document.getElementById("broadcastPreview").textContent = e.target.value;
+          });
+      }
+
+      async function sendBroadcast() {
+        await api("/api/admin/broadcast", {
+          method: "POST",
+          body: JSON.stringify({
+            segment: document.getElementById("segment").value,
+            message: document.getElementById("broadcastMessage").value,
+            scheduleAt: document.getElementById("scheduleAt").value,
+          }),
+        });
+      }
+
+      async function renderLogs() {
+        const logs = await api("/api/admin/logs");
+        const overview = await api("/api/admin/overview");
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Logs & Monitoring</h1>
+          <div class="mt-4 grid gap-4 md:grid-cols-4">
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">API response</p><p>${overview.logsMonitoring.apiResponseMs} ms</p></div>
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">Redis</p><p>${overview.logsMonitoring.redisStatus}</p></div>
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">Memory RSS</p><p>${overview.logsMonitoring.systemMetrics.memoryRssMb} MB</p></div>
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">Errors</p><p>${overview.logsMonitoring.errors.length}</p></div>
+          </div>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 max-h-[520px] overflow-auto">
+            ${logs.items.map((l) => `<div class="border-b py-2 text-xs dark:border-slate-800"><span class="font-semibold">${l.level || "info"}</span> ${l.timestamp} ${l.action || ""} ${l.target || ""}</div>`).join("")}
+          </div>
+        `;
+      }
+
+      async function renderSettings() {
+        const settings = await api("/api/admin/settings");
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Settings</h1>
+          <div class="mt-4 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 space-y-3">
+              <h3 class="font-semibold">WhatsApp API config</h3>
+              <input id="webhookUrl" class="w-full rounded border p-2 bg-transparent" value="${settings.whatsappApiConfig.webhookUrl || ""}" placeholder="Webhook URL" />
+              <input id="twilioNumber" class="w-full rounded border p-2 bg-transparent" value="${settings.whatsappApiConfig.twilioPhoneNumber || ""}" placeholder="Twilio Number" />
+              <input id="rateLimit" class="w-full rounded border p-2 bg-transparent" value="${settings.rateLimitMaxRequests || ""}" placeholder="Rate limit" />
+              <label><input id="maintenanceMode" type="checkbox" ${settings.maintenanceMode ? "checked" : ""}/> Maintenance mode</label>
+              <button class="rounded bg-emerald-600 px-3 py-2 text-white" ${can("settings") ? "" : "disabled"} onclick="saveSettings()">Save</button>
+            </div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 space-y-2">
+              <h3 class="font-semibold">Secrets</h3>
+              <p class="text-sm text-slate-500">Webhook secret is masked: ${settings.webhookSecret || "-"}</p>
+            </div>
+          </div>
+        `;
+      }
+
+      async function saveSettings() {
+        await api("/api/admin/settings", {
+          method: "PATCH",
+          body: JSON.stringify({
+            whatsappApiConfig: {
+              webhookUrl: document.getElementById("webhookUrl").value,
+              twilioPhoneNumber: document.getElementById("twilioNumber").value,
+            },
+            rateLimitMaxRequests: document.getElementById("rateLimit").value,
+            maintenanceMode: document.getElementById("maintenanceMode").checked,
+          }),
+        });
+      }
+
+      async function renderPage(page, search = "") {
+        currentPage = page;
+        if (page === "overview") return renderOverview();
+        if (page === "conversations") return renderConversations(search);
+        if (page === "users") return renderUsers(search);
+        if (page === "brain") return renderBrain();
+        if (page === "broadcast") return renderBroadcast();
+        if (page === "logs") return renderLogs();
+        if (page === "settings") return renderSettings();
+      }
+
+      function initUiEvents() {
+        document.querySelectorAll(".nav-btn").forEach((btn) => {
+          btn.addEventListener("click", () =>
+            renderPage(btn.dataset.page, document.getElementById("searchInput").value)
+          );
+        });
+        document.getElementById("searchInput").addEventListener("input", (e) => {
+          if (currentPage === "users" || currentPage === "conversations")
+            renderPage(currentPage, e.target.value);
+        });
+        document.getElementById("themeToggle").addEventListener("click", () => {
+          document.documentElement.classList.toggle("dark");
+        });
+        document.getElementById("profileBtn").addEventListener("click", () => {
+          document.getElementById("profileMenu").classList.toggle("hidden");
+        });
+        document.getElementById("logoutBtn").addEventListener("click", async () => {
+          if (firebaseAuth) await signOut(firebaseAuth);
+          localStorage.removeItem("access_token");
+          location.reload();
+        });
+      }
+
+      function decodeJwtPayload(token) {
+        try {
+          return JSON.parse(atob(token.split(".")[1] || "e30="));
+        } catch {
+          return {};
+        }
+      }
+
+      async function bootstrap() {
+        try {
+          await loadFirebaseAuth();
+        } catch (error) {
+          document.getElementById("loginError").textContent = error.message;
+        }
+
+        const stored = localStorage.getItem("access_token");
+        if (stored) {
+          accessToken = stored;
+          const payload = decodeJwtPayload(stored);
+          currentRole = payload.role || payload.claims?.role || "viewer";
+          document.getElementById("roleBadge").textContent = `Role: ${currentRole}`;
+          document.getElementById("loginView").classList.add("hidden");
+          document.getElementById("appView").classList.remove("hidden");
+          initUiEvents();
+          renderPage("overview");
+          return;
+        }
+
+        document.getElementById("loginBtn").addEventListener("click", async () => {
+          try {
+            const email = document.getElementById("email").value;
+            const password = document.getElementById("password").value;
+            const cred = await signInWithEmailAndPassword(firebaseAuth, email, password);
+            accessToken = await cred.user.getIdToken();
+            localStorage.setItem("access_token", accessToken);
+            location.reload();
+          } catch (error) {
+            document.getElementById("loginError").textContent = error.message;
+          }
+        });
+      }
+
+      bootstrap();
+
+      window.openThread = openThread;
+      window.flagConversation = flagConversation;
+      window.resetMemory = resetMemory;
+      window.sendOverride = sendOverride;
+      window.toggleBlock = toggleBlock;
+      window.setTags = setTags;
+      window.saveBrain = saveBrain;
+      window.testBrain = testBrain;
+      window.sendBroadcast = sendBroadcast;
+      window.saveSettings = saveSettings;
+    </script>
+  </head>
+  <body class="bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div id="loginView" class="min-h-screen flex items-center justify-center p-4">
+      <div class="w-full max-w-md rounded-xl border bg-white p-6 shadow dark:bg-slate-900">
+        <h1 class="text-2xl font-bold">AfriClaw Admin</h1>
+        <p class="mt-1 text-sm text-slate-500">Sign in with Firebase credentials</p>
+        <div class="mt-4 space-y-3">
+          <input id="email" type="email" placeholder="Email" class="w-full rounded border p-2 bg-transparent" />
+          <input id="password" type="password" placeholder="Password" class="w-full rounded border p-2 bg-transparent" />
+          <button id="loginBtn" class="w-full rounded bg-emerald-600 px-4 py-2 text-white">Sign in</button>
+          <p id="loginError" class="text-sm text-red-500"></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="appView" class="hidden min-h-screen">
+      <div class="flex min-h-screen">
+        <aside class="w-64 border-r bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+          <h2 class="text-lg font-semibold">AfriClaw</h2>
+          <p id="roleBadge" class="mt-1 text-xs text-emerald-600"></p>
+          <nav class="mt-6 space-y-2">
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="overview">Overview</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="conversations">Conversations</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="users">Users</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="brain">Brain Control</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="broadcast">Broadcast</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="logs">Logs & Monitoring</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="settings">Settings</button>
+          </nav>
+        </aside>
+
+        <main class="flex-1">
+          <header class="flex items-center justify-between border-b bg-white px-4 py-3 dark:bg-slate-900 dark:border-slate-800">
+            <input id="searchInput" class="w-72 rounded border p-2 bg-transparent" placeholder="Search users or conversations..." />
+            <div class="flex items-center gap-3">
+              <button id="themeToggle" class="rounded border px-3 py-1">Dark/Light</button>
+              <button class="rounded border px-3 py-1">Notifications</button>
+              <div class="relative">
+                <button id="profileBtn" class="rounded border px-3 py-1">Admin</button>
+                <div id="profileMenu" class="hidden absolute right-0 mt-2 w-40 rounded border bg-white p-2 shadow dark:bg-slate-800">
+                  <button id="logoutBtn" class="w-full rounded px-2 py-1 text-left hover:bg-slate-100 dark:hover:bg-slate-700">Logout</button>
+                </div>
+              </div>
+            </div>
+          </header>
+          <section id="content" class="p-6"></section>
+        </main>
+      </div>
+    </div>
+  </body>
+-->
+<!--
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AfriClaw Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  </head>
+  <body class="bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div id="loginView" class="min-h-screen flex items-center justify-center p-4">
+      <div class="w-full max-w-md rounded-xl border bg-white p-6 shadow dark:bg-slate-900">
+        <h1 class="text-2xl font-bold">AfriClaw Admin</h1>
+        <p class="mt-1 text-sm text-slate-500">Sign in with Supabase credentials</p>
+        <div class="mt-4 space-y-3">
+          <input id="email" type="email" placeholder="Email" class="w-full rounded border p-2 bg-transparent" />
+          <input id="password" type="password" placeholder="Password" class="w-full rounded border p-2 bg-transparent" />
+          <button id="loginBtn" class="w-full rounded bg-emerald-600 px-4 py-2 text-white">Sign in</button>
+          <p id="loginError" class="text-sm text-red-500"></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="appView" class="hidden min-h-screen">
+      <div class="flex min-h-screen">
+        <aside class="w-64 border-r bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+          <h2 class="text-lg font-semibold">AfriClaw</h2>
+          <p id="roleBadge" class="mt-1 text-xs text-emerald-600"></p>
+          <nav class="mt-6 space-y-2">
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="overview">Overview</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="conversations">Conversations</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="users">Users</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="brain">Brain Control</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="broadcast">Broadcast</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="logs">Logs & Monitoring</button>
+            <button class="nav-btn w-full text-left rounded px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800" data-page="settings">Settings</button>
+          </nav>
+        </aside>
+
+        <main class="flex-1">
+          <header class="flex items-center justify-between border-b bg-white px-4 py-3 dark:bg-slate-900 dark:border-slate-800">
+            <input id="searchInput" class="w-72 rounded border p-2 bg-transparent" placeholder="Search users or conversations..." />
+            <div class="flex items-center gap-3">
+              <button id="themeToggle" class="rounded border px-3 py-1">Dark/Light</button>
+              <button class="rounded border px-3 py-1">Notifications</button>
+              <div class="relative">
+                <button id="profileBtn" class="rounded border px-3 py-1">Admin</button>
+                <div id="profileMenu" class="hidden absolute right-0 mt-2 w-40 rounded border bg-white p-2 shadow dark:bg-slate-800">
+                  <button id="logoutBtn" class="w-full rounded px-2 py-1 text-left hover:bg-slate-100 dark:hover:bg-slate-700">Logout</button>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <section id="content" class="p-6"></section>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const SUPABASE_URL = localStorage.getItem("supabase_url") || "";
+      const SUPABASE_ANON_KEY = localStorage.getItem("supabase_anon_key") || "";
+      const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+      let accessToken = "";
+      let currentRole = "viewer";
+      let currentPage = "overview";
+
+      const roleActions = {
+        viewer: [],
+        operator: ["override", "flag", "broadcast", "brain"],
+        admin: ["override", "flag", "broadcast", "brain", "settings", "reset"]
+      };
+
+      function api(path, options = {}) {
+        return fetch(path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+            ...(options.headers || {})
+          }
+        }).then((r) => r.json());
+      }
+
+      function can(action) {
+        return roleActions[currentRole]?.includes(action);
+      }
+
+      async function renderOverview() {
+        const data = await api("/api/admin/overview");
+        const content = document.getElementById("content");
+        content.innerHTML = `
+          <h1 class="text-2xl font-semibold">Overview</h1>
+          <div class="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-4">
+            ${["Total users","Active conversations","Messages today","Brain response time","Error rate","Uptime"].map((title, i) => {
+              const values = [
+                data.totalUsers,
+                data.activeConversations,
+                data.messagesToday,
+                data.brainResponseTimeMs + " ms",
+                Math.round(data.errorRate * 100) + "%",
+                data.uptimeSeconds + " s"
+              ];
+              return `<div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><p class="text-sm text-slate-500">${title}</p><p class="mt-1 text-2xl font-semibold">${values[i] ?? "-"}</p></div>`;
+            }).join("")}
+          </div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><canvas id="lineChart"></canvas></div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800"><canvas id="barChart"></canvas></div>
+          </div>
+        `;
+        new Chart(document.getElementById("lineChart"), { type: "line", data: { labels: data.lineChart.map(d => d.day), datasets: [{ label: "Messages", data: data.lineChart.map(d => d.messages) }] }});
+        new Chart(document.getElementById("barChart"), { type: "bar", data: { labels: data.barChart.map(d => d.label), datasets: [{ label: "Requests", data: data.barChart.map(d => d.value) }] }});
+      }
+
+      async function renderConversations(search = "") {
+        const data = await api(`/api/admin/conversations?page=1&pageSize=20&search=${encodeURIComponent(search)}`);
+        const content = document.getElementById("content");
+        content.innerHTML = `
+          <h1 class="text-2xl font-semibold">Conversations</h1>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left"><th>User</th><th>Last Message</th><th>Time</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${data.items.map((row) => `
+                  <tr class="border-t dark:border-slate-800">
+                    <td>${row.phoneNumber}</td>
+                    <td>${(row.lastMessage || "").slice(0, 60)}</td>
+                    <td>${row.lastMessageAt || "-"}</td>
+                    <td class="space-x-2 py-2">
+                      <button class="rounded border px-2 py-1" onclick="openThread('${row.phoneNumber}')">Thread</button>
+                      ${can("flag") ? `<button class="rounded border px-2 py-1" onclick="flagConversation('${row.phoneNumber}')">Flag</button>` : ""}
+                      ${can("reset") ? `<button class="rounded border px-2 py-1" onclick="resetMemory('${row.phoneNumber}')">Reset Memory</button>` : ""}
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div id="threadView" class="mt-4"></div>
+        `;
+      }
+
+      async function openThread(phoneNumber) {
+        const thread = await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}`);
+        document.getElementById("threadView").innerHTML = `
+          <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+            <h3 class="font-semibold">Thread: ${thread.phoneNumber}</h3>
+            <div class="mt-3 max-h-72 overflow-y-auto space-y-2">
+              ${thread.messages.map((m) => `<div class="rounded border p-2 dark:border-slate-700"><p class="text-xs text-slate-500">${m.role} • ${m.timestamp || "-"}</p><p>${m.content}</p></div>`).join("")}
+            </div>
+            ${can("override") ? `<div class="mt-3 flex gap-2"><input id="overrideInput" class="flex-1 rounded border p-2 bg-transparent" placeholder="Manual override reply"/><button class="rounded bg-emerald-600 px-3 py-2 text-white" onclick="sendOverride('${thread.phoneNumber}')">Send</button></div>` : ""}
+          </div>
+        `;
+      }
+
+      async function sendOverride(phoneNumber) {
+        const message = document.getElementById("overrideInput").value;
+        await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/override-reply`, {
+          method: "POST",
+          body: JSON.stringify({ message })
+        });
+        await openThread(phoneNumber);
+      }
+
+      async function flagConversation(phoneNumber) {
+        await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/flag`, { method: "POST" });
+      }
+
+      async function resetMemory(phoneNumber) {
+        await api(`/api/admin/conversations/${encodeURIComponent(phoneNumber)}/reset-memory`, { method: "POST" });
+      }
+
+      async function renderUsers(search = "") {
+        const data = await api(`/api/admin/users?page=1&pageSize=20&search=${encodeURIComponent(search)}`);
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Users</h1>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 overflow-auto">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left"><th>Phone</th><th>Language</th><th>Messages</th><th>Status</th><th>Tags</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${data.items.map((u) => `
+                  <tr class="border-t dark:border-slate-800">
+                    <td>${u.phoneNumber}</td>
+                    <td>${u.language || "-"}</td>
+                    <td>${u.totalMessages || 0}</td>
+                    <td>${u.blocked ? "Blocked" : "Active"}</td>
+                    <td>${(u.tags || []).join(", ")}</td>
+                    <td class="space-x-2 py-2">
+                      ${can("settings") ? `<button class="rounded border px-2 py-1" onclick="toggleBlock('${u.phoneNumber}', ${!u.blocked})">${u.blocked ? "Unblock" : "Block"}</button>` : ""}
+                      ${can("settings") ? `<button class="rounded border px-2 py-1" onclick="setTags('${u.phoneNumber}')">Assign tags</button>` : ""}
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      async function toggleBlock(phoneNumber, blocked) {
+        await api(`/api/admin/users/${encodeURIComponent(phoneNumber)}`, { method: "PATCH", body: JSON.stringify({ blocked }) });
+        await renderUsers(document.getElementById("searchInput").value);
+      }
+
+      async function setTags(phoneNumber) {
+        const tags = prompt("Comma-separated tags");
+        if (!tags) return;
+        await api(`/api/admin/users/${encodeURIComponent(phoneNumber)}`, { method: "PATCH", body: JSON.stringify({ tags: tags.split(",").map((t) => t.trim()).filter(Boolean) }) });
+        await renderUsers(document.getElementById("searchInput").value);
+      }
+
+      async function renderBrain() {
+        const brain = await api("/api/admin/brain");
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Brain Control</h1>
+          <div class="mt-4 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+              <label class="text-sm">System prompt</label>
+              <textarea id="brainPrompt" class="mt-1 w-full rounded border p-2 bg-transparent" rows="8">${brain.systemPrompt}</textarea>
+              <label class="mt-3 block text-sm">Temperature</label>
+              <input id="brainTemp" class="mt-1 w-full" type="range" min="0" max="1" step="0.1" value="${brain.temperature}" />
+              <div class="mt-2 space-x-3">
+                ${Object.keys(brain.tools).map((k) => `<label><input type="checkbox" id="tool_${k}" ${brain.tools[k] ? "checked" : ""}/> ${k}</label>`).join("")}
+              </div>
+              ${can("brain") ? `<button class="mt-3 rounded bg-emerald-600 px-3 py-2 text-white" onclick="saveBrain()">Save</button>` : ""}
+            </div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+              <label class="text-sm">Test message input</label>
+              <input id="brainTestInput" class="mt-1 w-full rounded border p-2 bg-transparent" />
+              <button class="mt-2 rounded border px-3 py-2" onclick="testBrain()">Run Test</button>
+              <pre id="brainTestOutput" class="mt-3 max-h-64 overflow-auto rounded border p-2 text-xs"></pre>
+            </div>
+          </div>
+        `;
+      }
+
+      async function saveBrain() {
+        const tools = {};
+        ["knowledge", "payments", "memory"].forEach((k) => tools[k] = document.getElementById(`tool_${k}`)?.checked || false);
+        await api("/api/admin/brain", {
+          method: "PATCH",
+          body: JSON.stringify({
+            systemPrompt: document.getElementById("brainPrompt").value,
+            temperature: Number(document.getElementById("brainTemp").value),
+            tools
+          })
+        });
+      }
+
+      async function testBrain() {
+        const output = await api("/api/admin/brain/test", { method: "POST", body: JSON.stringify({ input: document.getElementById("brainTestInput").value }) });
+        document.getElementById("brainTestOutput").textContent = JSON.stringify(output, null, 2);
+      }
+
+      function renderBroadcast() {
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Broadcast</h1>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 space-y-3 max-w-2xl">
+            <select id="segment" class="w-full rounded border p-2 bg-transparent"><option value="all">All Users</option><option value="active">Active Users</option><option value="tag:vip">VIP Tag</option></select>
+            <textarea id="broadcastMessage" rows="5" class="w-full rounded border p-2 bg-transparent" placeholder="Broadcast message"></textarea>
+            <input id="scheduleAt" type="datetime-local" class="w-full rounded border p-2 bg-transparent" />
+            <button class="rounded bg-emerald-600 px-3 py-2 text-white" ${can("broadcast") ? "" : "disabled"} onclick="sendBroadcast()">Schedule Broadcast</button>
+            <p class="text-xs text-slate-500">Preview: <span id="broadcastPreview"></span></p>
+          </div>
+        `;
+        document.getElementById("broadcastMessage").addEventListener("input", (e) => {
+          document.getElementById("broadcastPreview").textContent = e.target.value;
+        });
+      }
+
+      async function sendBroadcast() {
+        await api("/api/admin/broadcast", {
+          method: "POST",
+          body: JSON.stringify({
+            segment: document.getElementById("segment").value,
+            message: document.getElementById("broadcastMessage").value,
+            scheduleAt: document.getElementById("scheduleAt").value
+          })
+        });
+      }
+
+      async function renderLogs() {
+        const logs = await api("/api/admin/logs");
+        const overview = await api("/api/admin/overview");
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Logs & Monitoring</h1>
+          <div class="mt-4 grid gap-4 md:grid-cols-4">
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">API response</p><p>${overview.logsMonitoring.apiResponseMs} ms</p></div>
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">Redis</p><p>${overview.logsMonitoring.redisStatus}</p></div>
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">Memory RSS</p><p>${overview.logsMonitoring.systemMetrics.memoryRssMb} MB</p></div>
+            <div class="rounded border bg-white p-3 dark:bg-slate-900 dark:border-slate-800"><p class="text-xs text-slate-500">Errors</p><p>${overview.logsMonitoring.errors.length}</p></div>
+          </div>
+          <div class="mt-4 rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 max-h-[520px] overflow-auto">
+            ${logs.items.map((l) => `<div class="border-b py-2 text-xs dark:border-slate-800"><span class="font-semibold">${l.level || "info"}</span> ${l.timestamp} ${l.action || ""} ${l.target || ""}</div>`).join("")}
+          </div>
+        `;
+      }
+
+      async function renderSettings() {
+        const settings = await api("/api/admin/settings");
+        document.getElementById("content").innerHTML = `
+          <h1 class="text-2xl font-semibold">Settings</h1>
+          <div class="mt-4 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 space-y-3">
+              <h3 class="font-semibold">WhatsApp API config</h3>
+              <input id="webhookUrl" class="w-full rounded border p-2 bg-transparent" value="${settings.whatsappApiConfig.webhookUrl || ""}" placeholder="Webhook URL" />
+              <input id="twilioNumber" class="w-full rounded border p-2 bg-transparent" value="${settings.whatsappApiConfig.twilioPhoneNumber || ""}" placeholder="Twilio Number" />
+              <input id="rateLimit" class="w-full rounded border p-2 bg-transparent" value="${settings.rateLimitMaxRequests || ""}" placeholder="Rate limit" />
+              <label><input id="maintenanceMode" type="checkbox" ${settings.maintenanceMode ? "checked" : ""}/> Maintenance mode</label>
+              <button class="rounded bg-emerald-600 px-3 py-2 text-white" ${can("settings") ? "" : "disabled"} onclick="saveSettings()">Save</button>
+            </div>
+            <div class="rounded-xl border bg-white p-4 dark:bg-slate-900 dark:border-slate-800 space-y-2">
+              <h3 class="font-semibold">Secrets</h3>
+              <p class="text-sm text-slate-500">Webhook secret is masked: ${settings.webhookSecret || "-"}</p>
+            </div>
+          </div>
+        `;
+      }
+
+      async function saveSettings() {
+        await api("/api/admin/settings", {
+          method: "PATCH",
+          body: JSON.stringify({
+            whatsappApiConfig: {
+              webhookUrl: document.getElementById("webhookUrl").value,
+              twilioPhoneNumber: document.getElementById("twilioNumber").value
+            },
+            rateLimitMaxRequests: document.getElementById("rateLimit").value,
+            maintenanceMode: document.getElementById("maintenanceMode").checked
+          })
+        });
+      }
+
+      async function renderPage(page, search = "") {
+        currentPage = page;
+        if (page === "overview") return renderOverview();
+        if (page === "conversations") return renderConversations(search);
+        if (page === "users") return renderUsers(search);
+        if (page === "brain") return renderBrain();
+        if (page === "broadcast") return renderBroadcast();
+        if (page === "logs") return renderLogs();
+        if (page === "settings") return renderSettings();
+      }
+
+      function initUiEvents() {
+        document.querySelectorAll(".nav-btn").forEach((btn) => {
+          btn.addEventListener("click", () => renderPage(btn.dataset.page, document.getElementById("searchInput").value));
+        });
+        document.getElementById("searchInput").addEventListener("input", (e) => {
+          if (currentPage === "users" || currentPage === "conversations") renderPage(currentPage, e.target.value);
+        });
+        document.getElementById("themeToggle").addEventListener("click", () => {
+          document.documentElement.classList.toggle("dark");
+        });
+        document.getElementById("profileBtn").addEventListener("click", () => {
+          document.getElementById("profileMenu").classList.toggle("hidden");
+        });
+        document.getElementById("logoutBtn").addEventListener("click", async () => {
+          if (supabase) await supabase.auth.signOut();
+          localStorage.removeItem("access_token");
+          location.reload();
+        });
+      }
+
+      async function bootstrap() {
+        const stored = localStorage.getItem("access_token");
+        if (stored) {
+          accessToken = stored;
+          const payload = JSON.parse(atob(stored.split(".")[1] || "e30="));
+          currentRole = payload.role || payload.user_metadata?.role || "viewer";
+          document.getElementById("roleBadge").textContent = `Role: ${currentRole}`;
+          document.getElementById("loginView").classList.add("hidden");
+          document.getElementById("appView").classList.remove("hidden");
+          initUiEvents();
+          renderPage("overview");
+          return;
+        }
+
+        document.getElementById("loginBtn").addEventListener("click", async () => {
+          if (!supabase) {
+            document.getElementById("loginError").textContent = "Set localStorage supabase_url and supabase_anon_key first.";
+            return;
+          }
+          const email = document.getElementById("email").value;
+          const password = document.getElementById("password").value;
+          const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+          if (error) {
+            document.getElementById("loginError").textContent = error.message;
+            return;
+          }
+          accessToken = data.session.access_token;
+          localStorage.setItem("access_token", accessToken);
+          location.reload();
+        });
+      }
+
+      bootstrap();
+    </script>
+  </body>
+-->
+<!--
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -283,7 +1361,7 @@
       </div>
 
       <footer>
-        <p>AfriClaw © 2024 | Empowering Africa with AI</p>
+        <p>AfriClaw © 2026 | Empowering Africa with AI</p>
         <p class="timestamp" id="last-updated"></p>
       </footer>
     </div>
@@ -413,4 +1491,4 @@
       setInterval(refreshDashboard, 30000);
     </script>
   </body>
-</html>
+-->

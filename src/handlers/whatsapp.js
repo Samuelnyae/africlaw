@@ -1,11 +1,14 @@
 const twilio = require('twilio');
-const { getClaudeResponse, isMPesaRequest } = require('./claude');
+const { isMPesaRequest } = require('./claude');
 const { getOrCreateUser, updateLastMessageTime } = require('../services/userService');
 const {
   storeMessage,
   getConversationHistory,
   getTodayMessageCount,
 } = require('../services/messageService');
+const { processBrainMessage } = require('../services/brainClient');
+const { getSession, setSession } = require('../services/cacheService');
+const { messageCounter } = require('../observability/metrics');
 
 // Initialize Twilio client only if credentials are available
 let twilioClient = null;
@@ -46,7 +49,7 @@ function extractMessageText(req) {
  */
 function verifyTwilioRequest(req, token) {
   const signature = req.header('x-twilio-signature') || '';
-  const url = `${process.env.WEBHOOK_URL}${req.baseUrl}${req.url}`;
+  const url = `${process.env.WEBHOOK_URL || ''}${req.originalUrl}`;
 
   try {
     return twilio.validateRequest(token, signature, url, req.body);
@@ -113,11 +116,13 @@ async function handleWebhook(req, res) {
   try {
     console.log('[AfriClaw] Incoming WhatsApp webhook received');
 
-    // Verify Twilio signature
-    // if (!verifyTwilioRequest(req, process.env.TWILIO_AUTH_TOKEN)) {
-    //   console.error('[AfriClaw] Invalid Twilio signature');
-    //   return res.status(403).send('Forbidden');
-    // }
+    // Verify Twilio signature for webhook security.
+    if (process.env.ENFORCE_TWILIO_SIGNATURE === 'true') {
+      if (!verifyTwilioRequest(req, process.env.TWILIO_AUTH_TOKEN)) {
+        console.error('[AfriClaw] Invalid Twilio signature');
+        return res.status(403).send('Forbidden');
+      }
+    }
 
     // Extract message details
     const phoneNumber = extractPhoneNumber(req);
@@ -125,6 +130,7 @@ async function handleWebhook(req, res) {
 
     if (!messageText.trim()) {
       console.log('[AfriClaw] Empty message received');
+      messageCounter.inc({ result: 'empty' });
       return res.status(200).send('OK');
     }
 
@@ -143,6 +149,7 @@ async function handleWebhook(req, res) {
         phoneNumber,
         'Umetumia ujumbe mwingi sana leo. Tafadhali jaribu kesho. (You\'ve sent too many messages today. Please try again tomorrow.)'
       );
+      messageCounter.inc({ result: 'rate_limited' });
       return res.status(200).send('OK');
     }
 
@@ -150,8 +157,13 @@ async function handleWebhook(req, res) {
     await storeMessage(phoneNumber, 'user', messageText);
     await updateLastMessageTime(phoneNumber);
 
-    // Get conversation history
-    const conversationHistory = await getConversationHistory(phoneNumber, 10);
+    // Session caching keeps context retrieval lightweight and stateless for pods.
+    const cachedSession = await getSession(phoneNumber);
+    let conversationHistory = cachedSession?.conversationHistory;
+    if (!conversationHistory) {
+      conversationHistory = await getConversationHistory(phoneNumber, 10);
+      await setSession(phoneNumber, { conversationHistory }, 1800);
+    }
 
     // Check if this is M-Pesa related
     if (isMPesaRequest(messageText)) {
@@ -169,23 +181,35 @@ async function handleWebhook(req, res) {
       return res.status(200).send('OK');
     }
 
-    // Get Claude response
-    const claudeResponse = await getClaudeResponse(
+    const brainPayload = {
+      phoneNumber,
       messageText,
       conversationHistory,
-      phoneNumber
-    );
+      context: {
+        localeHint: 'kenya',
+        source: 'whatsapp',
+      },
+      memory: {
+        recall: true,
+      },
+      tools: ['knowledge', 'payments'],
+    };
+
+    const brainResult = await processBrainMessage(brainPayload);
+    const claudeResponse = brainResult.response;
 
     // Store assistant response
     await storeMessage(phoneNumber, 'assistant', claudeResponse);
 
     // Send response back to user
     await sendWhatsAppMessage(phoneNumber, claudeResponse);
+    messageCounter.inc({ result: 'success' });
 
     console.log(`[AfriClaw] Message handled successfully for ${phoneNumber}`);
     return res.status(200).send('OK');
   } catch (error) {
     console.error(`[AfriClaw] Webhook error: ${error.message}`);
+    messageCounter.inc({ result: 'error' });
     return res.status(500).json({ error: error.message });
   }
 }

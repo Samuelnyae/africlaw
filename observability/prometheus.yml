@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: bot-api
+    static_configs:
+      - targets: ["bot-api:3000"]
+    metrics_path: /metrics
+
+  - job_name: brain-service
+    static_configs:
+      - targets: ["brain-service:4000"]
+    metrics_path: /metrics

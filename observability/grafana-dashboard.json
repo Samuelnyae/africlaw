@@ -1,0 +1,28 @@
+{
+  "title": "AfriClaw WhatsApp Assistant",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP Request Duration",
+      "targets": [
+        {
+          "expr": "rate(africlaw_http_request_duration_seconds_sum[5m]) / rate(africlaw_http_request_duration_seconds_count[5m])"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Brain Requests (5m)",
+      "targets": [
+        {
+          "expr": "sum(rate(africlaw_brain_requests_total[5m]))"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    }
+  ]
+}

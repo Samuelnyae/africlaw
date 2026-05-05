@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: africlaw-config
+  namespace: africlaw
+data:
+  NODE_ENV: "production"
+  BRAIN_SERVICE_URL: "http://brain-service:4000"
+  BRAIN_TIMEOUT_MS: "5000"
+  BRAIN_RETRY_COUNT: "2"
+  REDIS_URL: "redis://redis:6379"
+  ENFORCE_TWILIO_SIGNATURE: "true"

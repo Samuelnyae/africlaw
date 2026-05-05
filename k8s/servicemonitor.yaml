@@ -1,0 +1,37 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bot-api-monitor
+  namespace: africlaw
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: bot-api
+  namespaceSelector:
+    matchNames:
+      - africlaw
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: brain-service-monitor
+  namespace: africlaw
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: brain-service
+  namespaceSelector:
+    matchNames:
+      - africlaw
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

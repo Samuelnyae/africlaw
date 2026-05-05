@@ -1,9 +1,14 @@
 require('dotenv').config();
+const Sentry = require('@sentry/node');
 const express = require('express');
 const moment = require('moment');
+const pinoHttp = require('pino-http');
 
 // Import middleware
 const { requestLogger, basicAuth } = require('./middleware/auth');
+const { securityHeaders, requireHttps } = require('./middleware/security');
+const logger = require('./utils/logger');
+const { metricsMiddleware, metricsHandler } = require('./observability/metrics');
 const {
   apiLimiter,
   whatsappLimiter,
@@ -17,14 +22,26 @@ const { handleMPesaCallback } = require('./handlers/mpesa');
 
 // Import services
 const { getDashboardData } = require('./services/dashboardService');
+const adminRoutes = require('./routes/adminRoutes');
 
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+  });
+}
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(securityHeaders);
+app.use(requireHttps);
+app.use(pinoHttp({ logger }));
+app.use(metricsMiddleware);
 app.use(requestLogger);
 
 // CORS setup
@@ -265,10 +282,11 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
-    service: 'AfriClaw',
+    service: 'bot-api',
     timestamp: moment().toISOString(),
   });
 });
+app.get('/metrics', metricsHandler);
 
 // WhatsApp Webhook
 app.post('/whatsapp/webhook', whatsappLimiter, handleWebhook);
@@ -295,7 +313,8 @@ app.get('/admin/data', adminLimiter, basicAuth, async (req, res) => {
 
 // Serve admin dashboard HTML
 app.get('/admin', adminLimiter, (req, res) => {
-  res.sendFile(__dirname + '/../public/admin.html');
+  const path = require('path');
+  res.sendFile(path.resolve(__dirname, '..', 'public', 'admin.html'));
 });
 
 // API endpoint to get all users (for dashboard)
@@ -337,6 +356,19 @@ app.get('/api/mpesa/transactions', apiLimiter, basicAuth, async (req, res) => {
   }
 });
 
+// Public Firebase web config for admin login.
+app.get('/api/admin/auth-config', (req, res) => {
+  res.json({
+    apiKey: process.env.FIREBASE_WEB_API_KEY || '',
+    authDomain: process.env.FIREBASE_WEB_AUTH_DOMAIN || '',
+    projectId: process.env.FIREBASE_WEB_PROJECT_ID || '',
+    appId: process.env.FIREBASE_WEB_APP_ID || '',
+  });
+});
+
+// New admin API (Firebase JWT + RBAC protected)
+app.use('/api/admin', adminRoutes);
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -349,6 +381,7 @@ app.use((req, res) => {
 // Error handler
 app.use((err, req, res, next) => {
   console.error(`[AfriClaw] Unhandled error: ${err.message}`);
+  if (process.env.SENTRY_DSN) Sentry.captureException(err);
   res.status(500).json({
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : 'Server error',
@@ -357,15 +390,14 @@ app.use((err, req, res, next) => {
 
 // Start server
 const server = app.listen(PORT, () => {
-  console.log(`
-╔══════════════════════════════════════╗
-║    AfriClaw Server Started            ║
-║    Listening on port ${PORT}            ║
-║    Environment: ${process.env.NODE_ENV || 'development'}         ║
-║    Timestamp: ${moment().format('YYYY-MM-DD HH:mm:ss')}     ║
-╚══════════════════════════════════════╝
-  `);
-  console.log('[AfriClaw] Waiting for WhatsApp messages...');
+  logger.info(
+    {
+      port: PORT,
+      environment: process.env.NODE_ENV || 'development',
+      timestamp: moment().toISOString(),
+    },
+    'AfriClaw bot-api started'
+  );
 });
 
 // Graceful shutdown

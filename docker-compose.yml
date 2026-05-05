@@ -1,0 +1,30 @@
+version: "3.9"
+services:
+  bot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - BRAIN_SERVICE_URL=http://brain-service:4000
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - brain-service
+      - redis
+
+  brain-service:
+    build:
+      context: ./brain-service
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
