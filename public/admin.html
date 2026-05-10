@@ -70,13 +70,33 @@
       const decode = (token) => { try { return JSON.parse(atob(token.split(".")[1] || "e30=")); } catch { return {}; } };
 
       async function initFirebase() {
-        const r = await fetch("/api/admin/auth-config");
-        if (!r.ok) throw new Error("Failed to load auth config (server returned " + r.status + "). Make sure the Express server is running with: npm start");
-        const contentType = r.headers.get("content-type") || "";
-        if (!contentType.includes("application/json")) throw new Error("Auth config endpoint returned HTML instead of JSON. Make sure you access this page via the Express server (npm start), not directly as a file.");
-        const cfg = await r.json();
-        if (!cfg.apiKey || !cfg.authDomain || !cfg.projectId || !cfg.appId) throw new Error("Missing Firebase web auth config. Check FIREBASE_WEB_* variables in your .env file.");
-        auth = getAuth(initializeApp(cfg));
+        const fallbackCfg = {
+          apiKey: "AIzaSyDql_w6r7Ny5-BmUCo8EPq5GhTV2uZohs0",
+          authDomain: "africlaw-b8ecd.firebaseapp.com",
+          projectId: "africlaw-b8ecd",
+          storageBucket: "africlaw-b8ecd.firebasestorage.app",
+          messagingSenderId: "61509066795",
+          appId: "1:61509066795:web:c483989f805e141d6e0a6e"
+        };
+
+        try {
+          const r = await fetch("/api/admin/auth-config");
+          if (r.ok) {
+            const contentType = r.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+              const cfg = await r.json();
+              if (cfg.apiKey && cfg.authDomain && cfg.projectId && cfg.appId) {
+                auth = getAuth(initializeApp(cfg));
+                return;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to fetch auth config from server, using fallback:", e);
+        }
+
+        // Use fallback if server fetch failed or returned incomplete config
+        auth = getAuth(initializeApp(fallbackCfg));
       }
 
       function api(path, options = {}) {
