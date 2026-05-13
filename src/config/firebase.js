@@ -41,20 +41,45 @@ if (!IS_MOCK_MODE) {
     process.exit(1);
   }
 } else {
-  // Mock Firestore for development
-  db = {
-    collection: () => ({
-      doc: () => ({
-        get: async () => ({ exists: false, data: () => ({}) }),
-        set: async () => ({ success: true }),
-        update: async () => ({ success: true }),
-      }),
-      where: () => ({
-        get: async () => ({ docs: [] }),
-      }),
-      add: async () => ({ id: 'mock-id' }),
-      get: async () => ({ docs: [] }),
+  // Mock Firestore for development.
+  // Returns sensible empty defaults (0 counts, empty arrays) so the app
+  // doesn't crash when Firebase credentials are not configured.
+
+  // A chainable query builder that every mock query method returns.
+  // Supports: .where() .orderBy() .limit() .count() .get()
+  const mockQuery = () => ({
+    where: () => mockQuery(),
+    orderBy: () => mockQuery(),
+    limit: () => mockQuery(),
+    count: () => ({
+      get: async () => ({ data: () => ({ count: 0 }) }),
     }),
+    get: async () => ({ docs: [] }),
+  });
+
+  // A mock collection reference that supports all collection-level methods.
+  const mockCollection = () => ({
+    doc: () => ({
+      get: async () => ({ exists: false, data: () => ({}) }),
+      set: async () => ({ success: true }),
+      update: async () => ({ success: true }),
+      // Nested sub-collection (e.g. conversations/{id}/messages)
+      collection: () => mockCollection(),
+    }),
+    where: () => mockQuery(),
+    orderBy: () => mockQuery(),
+    limit: () => mockQuery(),
+    count: () => ({
+      get: async () => ({ data: () => ({ count: 0 }) }),
+    }),
+    add: async () => ({ id: 'mock-id' }),
+    get: async () => ({ docs: [] }),
+  });
+
+  db = {
+    collection: () => mockCollection(),
+    // collectionGroup mirrors the same chainable query interface
+    collectionGroup: () => mockQuery(),
   };
 }
 
